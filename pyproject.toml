@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "car-search"
+version = "0.1.0"
+description = "Personal used-car deal finder: multi-source listings, VIN dedupe, deal scoring and alerts"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+]
+
+[project.optional-dependencies]
+dashboard = ["streamlit>=1.50"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+car-search = "car_search.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["car_search*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
