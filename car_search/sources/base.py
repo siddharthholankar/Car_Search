@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 
 from ..config import SearchConfig
@@ -24,5 +25,10 @@ def matches(listing: Listing, search: SearchConfig) -> bool:
         return False
     if listing.distance_miles is not None and listing.distance_miles > search.radius_miles:
         return False
-    wanted = {(v.make.lower(), v.model.lower()) for v in search.vehicles}
-    return (listing.make.lower(), listing.model.lower()) in wanted
+    make, model = listing.make.lower(), _squash(listing.model)
+    # "CR-V", "CRV" and "CR-V Hybrid" all count as a CR-V.
+    return any(make == v.make.lower() and model.startswith(_squash(v.model)) for v in search.vehicles)
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())

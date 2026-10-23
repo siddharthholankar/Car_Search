@@ -1,22 +1,15 @@
-"""Dealer inventory feeds published as CSV or JSON.
-
-Feeds vary, so columns are matched against a few common names. Only use feeds a
-dealer publishes for reuse, and check the site's terms first.
-"""
+"""Import files saved from your browser: pages ("Save page as" .html) and
+inventory spreadsheets some dealers offer for download (.csv / .json)."""
 
 from __future__ import annotations
 
 import io
-import logging
+from pathlib import Path
 
 import pandas as pd
-import requests
 
-from ..config import SearchConfig
-from ..models import Listing
-from .base import Source, matches
-
-log = logging.getLogger(__name__)
+from .extract import extract, page_from_html
+from .models import Listing
 
 COLUMN_ALIASES = {
     "vin": ["vin", "vin_number"],
@@ -38,27 +31,16 @@ COLUMN_ALIASES = {
 }
 
 
-class DealerFeedSource(Source):
-    name = "dealer_feed"
-
-    def __init__(self, urls: list[str], session: requests.Session | None = None):
-        self.urls = urls
-        self.session = session or requests.Session()
-
-    def fetch(self, search: SearchConfig) -> list[Listing]:
-        results: list[Listing] = []
-        for url in self.urls:
-            try:
-                resp = self.session.get(url, timeout=30)
-                resp.raise_for_status()
-                frame = read_feed(resp.text, url)
-            except Exception as exc:  # one bad feed shouldn't stop the run
-                log.warning("dealer feed %s failed: %s", url, exc)
-                continue
-            listings = [l for l in parse_frame(frame) if matches(l, search)]
-            log.info("dealer feed %s: %d matching listings", url, len(listings))
-            results.extend(listings)
-        return results
+def import_file(path: str | Path) -> list[Listing]:
+    path = Path(path)
+    text = path.read_text(errors="replace")
+    if path.suffix.lower() in {".html", ".htm", ".mhtml"}:
+        listings = extract(page_from_html(text))
+        for l in listings:
+            if l.source == "browser":
+                l.source = "saved-page"
+        return listings
+    return parse_frame(read_feed(text, path.name))
 
 
 def read_feed(text: str, url: str = "") -> pd.DataFrame:
@@ -99,5 +81,5 @@ def parse_frame(frame: pd.DataFrame) -> list[Listing]:
         for key in ("zip", "vin", "make", "model"):
             if values.get(key) is not None:
                 values[key] = str(values[key])
-        listings.append(Listing(source="dealer_feed", **values))
+        listings.append(Listing(source="file-import", **values))
     return listings

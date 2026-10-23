@@ -1,64 +1,69 @@
-# Car Search: a used-car deal finder
+# Car Search: a used-car deal finder that runs on your own browser
 
-Pulls used-car listings from several sources into one SQLite database, merges duplicates by VIN,
-scores each car against a market-price model, and sends an email or Telegram alert when a good
-deal shows up. A Streamlit dashboard shows the listings with filters, a map, price history and a
-payment calculator.
+There are no APIs, keys or paid services. You browse used-car listings the way you normally do,
+on Cars.com, CarGurus, Autotrader, Carfax, Facebook or dealer sites. A small browser extension
+saves the cars on each page you open to a program running on your own computer. That program
+then:
+
+- **merges duplicates by VIN**, since the same car often shows up on several sites;
+- **scores each deal** against a market-price model trained on the cars you've collected;
+- **pops up a browser notification** when a car is at least 8% below market (email is optional);
+- **tracks price history** each time you see a car again;
+- shows everything in a **dashboard**: filters, a map, price history, and a payment calculator.
 
 ```
-sources (MarketCheck / dealer feeds / sample)
-   → dedupe by VIN → NHTSA VIN decode + recalls → SQLite (listings, price_history)
-   → market-price model → deal score → alerts (email / Telegram) → dashboard
+pages you open ─▶ extension ─▶ car-search serve (127.0.0.1:8765, your computer only)
+                                  │ extract → dedupe by VIN → filter to your search
+                                  │ → SQLite → market model → deal score
+                  notification ◀──┘                         └─▶ dashboard (Streamlit)
 ```
 
-## Quick start
+The extension reads only pages you choose to open. It never crawls sites on its own or loads
+pages in the background, so it doesn't trip the sites' anti-bot blocks or their rules against
+automated scraping.
 
-```bash
-pip install -e ".[dashboard,dev]"
-car-search init                # writes config.toml from config.example.toml
-car-search run                 # collect, score, alert
-car-search top -n 15           # best current deals
-car-search dashboard           # opens the Streamlit app
-```
+## Setup (about 5 minutes)
 
-Out of the box only the `sample` source is enabled. It generates **fake** listings (VINs start
-with `DEMO`) around Alexandria, LA, so you can try everything without an API key. Turn it off
-once a real source is set up.
+1. **Install the program** (Python 3.11 or newer):
+   ```bash
+   pip install -e ".[dashboard]"
+   car-search init          # creates config.toml; edit your zip, models, price and miles
+   car-search serve         # leave this running while you browse
+   ```
+2. **Install the extension** in Chrome, Edge or Brave:
+   - Open `chrome://extensions` (or `edge://extensions`).
+   - Turn on **Developer mode**.
+   - Click **Load unpacked** and choose this project's `extension/` folder.
+   - Pin the 🚗 icon to the toolbar.
+3. **Browse.** Search for your cars on any listing site. Results pages and single-car pages both
+   work. The icon's badge shows how many cars on the page match your search, and turns into a
+   green **$** when the page has a deal. Click the icon to see each car's score.
+4. **See everything** with `car-search dashboard`, or the **Open dashboard** button in the popup.
 
-## Configuration (`config.toml`)
+Want to look around before setting anything up? Run `car-search demo`. It loads about 90 made-up
+cars (their VINs start with `DEMO`).
 
-| Section | What it controls |
-|---|---|
-| `[search]` | zip, radius, min year, max price, max miles, and the make/model list |
-| `[sources]` | `enabled = ["marketcheck", "dealer_feed"]`, API key, dealer feed URLs |
-| `[enrich]` | NHTSA VIN decoding and recall lookups (both free, no key) |
-| `[scoring]` | training minimum, "negotiable" day count, penalty and bonus weights |
-| `[alerts]` | threshold (default 0.08 = 8% below market), SMTP and Telegram settings |
+## How pages are read
 
-Secrets can come from environment variables instead of the file: `MARKETCHECK_API_KEY`,
-`SMTP_USER`, `SMTP_PASSWORD`, `ALERT_EMAIL_TO`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
-`config.toml` is git-ignored.
+- **Structured data first.** Most listing and dealer sites embed schema.org `Car`/`Vehicle`
+  data in the page for search engines. That gives the VIN, price, miles, year, make, model,
+  trim, drivetrain, the dealer and its location. One reader handles every site that uses it,
+  and it doesn't break when a site redesigns.
+- **Plain-text fallback.** For a single car's page without that data, it looks for exactly one
+  VIN, plus the title, price and mileage in the text. Pages showing several VINs but no
+  structured data are skipped, because it can't reliably tell which price goes with which car.
+- **Search filter.** Cars outside your search (model, year, price, miles, distance) are ignored.
+  Model names match loosely: `CR-V` also matches `CRV` and `CR-V Hybrid`.
+- **Sold cars.** You won't revisit every listing, so a car you haven't seen in `stale_days`
+  (default 14) is treated as sold and drops out of the active list.
+- **No extension?** You can save a page with the browser's **Save page as… → Webpage, HTML
+  only** and run `car-search import page.html`. Inventory CSV or JSON files that some dealers
+  offer for download import the same way.
 
-## Data sources
-
-The program uses official APIs and published feeds rather than scraping. Cars.com, Carfax,
-Edmunds and Facebook Marketplace prohibit scraping in their terms.
-
-- **MarketCheck** (`car_search/sources/marketcheck.py`): aggregated dealer listings, searched by
-  make, model, year, price, miles, zip and radius. It's a paid API with a free trial. Each vehicle
-  is fetched in pages of 50, up to `max_pages`. It also supplies the Carfax clean-title and
-  one-owner flags when the listing has them.
-- **Dealer feeds** (`car_search/sources/dealer_feed.py`): CSV or JSON inventory files that
-  dealers publish. Common column names (`vin`, `mileage`, `internet_price` and so on) are mapped
-  automatically. Check each dealer's terms first.
-- **NHTSA vPIC** (`car_search/nhtsa.py`): batch VIN decoding that fills in a missing trim,
-  drivetrain, engine or body type. Results are cached in the database.
-- **NHTSA recalls**: the public API looks recalls up by make, model and year, not by VIN, so the
-  dashboard shows every campaign for that model year. To see whether a specific car's recalls
-  were repaired, check its VIN at nhtsa.gov/recalls.
-- **Adding a source** (for example Auto.dev or CarsXE): subclass `Source` in
-  `car_search/sources/base.py`, return `Listing` objects, and register the class in
-  `sources/__init__.py`.
+**Site coverage varies.** Sites that embed vehicle data work best. Some sites build their pages
+in ways that hide the VIN. For those, open the car's own page (one car per page), and the text
+fallback usually catches it. If a site you use isn't being picked up, a page saved from it
+with "Save page as" is all that's needed to add support for it in `extract.py`.
 
 ## The deal score
 
@@ -67,82 +72,80 @@ value_score = (predicted_market_price − listing_price) / predicted_market_pric
 deal_score  = value_score + bonuses − penalties
 ```
 
-- **Market price model**: a ridge regression on log(price). Its inputs are age, age², miles,
-  miles per year, days listed, make/model, make/model/trim, drivetrain and state. It trains on
-  every car seen in the last 90 days. Each car's own prediction is made **out of fold** (5-fold
-  CV), so a car's asking price never feeds the estimate it's compared against. Salvage and
-  rebuilt cars are left out of the training data. With fewer than `min_training_rows` cars, it
-  falls back to the median price of the same model within ±1 model year.
-- **Penalties**: accident −5%, salvage/rebuilt −40%, repossession −5%, rental −3%, more than
+- **Market price model:** a ridge regression on log(price). Its inputs are age, age², miles,
+  miles per year, days listed, make/model, make/model/trim, drivetrain and state.
+  - It trains on every car seen in the last 90 days.
+  - Each car's price is predicted **out of fold**, so a car's own asking price never feeds the
+    estimate it's compared against.
+  - Salvage and rebuilt cars are left out of the training data.
+  - Until about 30 cars are collected, it uses the median price of the same model within ±1
+    model year instead. Browsing a few results pages is enough to get past 30.
+- **Penalties:** accident −5%, salvage/rebuilt −40%, repossession −5%, rental −3%, more than
   3 owners −3%.
-- **Bonuses**: one owner +2%, service records +1%, certified pre-owned +2%, listed more than
+- **Bonuses:** one owner +2%, service records +1%, certified pre-owned +2%, listed more than
   45 days +1% (the car is also flagged as negotiable).
-- All weights can be changed in `[scoring]`. On the sample data the model's median error is
-  about 6–7%.
-
-History flags are only as good as the source. MarketCheck supplies the title and one-owner
-flags. Accident, rental and owner-count details usually need a paid history report.
+- **Your own weights:** all of these can be changed under `[scoring]` in `config.toml`.
+- **History flags** come from whatever the page shows. A free Carfax link on a listing isn't
+  read automatically.
 
 ## Alerts
 
-After each run, active cars whose `deal_score` is at or above the threshold trigger an alert.
-A car alerts once, and again only if its price falls at least `realert_drop` (default 3%) below
-the price it last alerted at, so small $100 cuts don't resend the same car.
-
-- **Email**: SMTP with STARTTLS. For Gmail, use an app password.
-- **Telegram**: create a bot with @BotFather, then put its token and your chat id in the config.
-
-Run `car-search test-alert` to send the current best deal through the channels you've enabled.
-With no channel enabled, alerts are only logged, and cars aren't marked as alerted.
-
-## Scheduling (every 6 hours)
-
-cron:
-
-```cron
-0 */6 * * * cd /path/to/Car_Search && /usr/bin/env car-search run >> car_search.log 2>&1
-```
-
-Or keep a process running: `car-search run --watch 6`.
-
-A run marks cars it no longer sees as inactive, but only when every source answered. That way a
-single API outage doesn't empty the board.
-
-**Databricks:** the pipeline is plain Python on pandas DataFrames. To use Delta tables, swap
-`Database` for writes to Delta tables (`listings`, `price_history`) and schedule `car-search run`
-as a Job every 6 hours.
+- A **browser notification** fires the first time a car scores at or above `threshold`.
+  Clicking it opens the listing.
+- A car alerts again only if its price falls at least `realert_drop` (default 3%) below the
+  price it last alerted at.
+- **Email** is optional: set `email_enabled = true` and your SMTP details. For Gmail, use an app
+  password. `car-search test-alert` sends a test.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `car-search run [--no-alerts] [--watch HOURS]` | collect, dedupe, enrich, store, score, alert |
-| `car-search top [-n 20] [--all] [--rescore]` | table of the best deals |
+| `car-search init` | create `config.toml` |
+| `car-search serve` | receive pages from the extension (keep it running while you browse) |
+| `car-search dashboard` | open the Streamlit dashboard |
+| `car-search top [-n 20] [--all]` | best current deals in the terminal |
 | `car-search history VIN` | price changes for one car |
+| `car-search import FILE...` | import saved `.html` pages or `.csv`/`.json` inventory files |
 | `car-search payment PRICE --down --apr --term --tax --fees --trade-in` | loan payment, interest, resale estimate |
-| `car-search test-alert` | send a test alert |
-| `car-search dashboard` | Streamlit app (`streamlit run dashboard/app.py`) |
+| `car-search demo` | load made-up sample cars |
+| `car-search test-alert` | email the current best deal |
 
-The payment calculator's default sales tax is 9.45%, roughly the Louisiana state rate plus the
-Rapides Parish rate. Change it to match where you'll register the car.
+- **Recalls:** the dashboard has a link that opens the car's VIN on nhtsa.gov in your browser,
+  where you can see open recalls.
+- **Sales tax:** the payment calculator defaults to 9.45%, roughly the Louisiana state rate plus
+  the Rapides Parish rate. Change it to match where you'll register the car.
+
+## Privacy and safety
+
+- **Content script:** the extension runs one on every page, but it sends nothing unless the page
+  contains vehicle data or a VIN. Turn off "Save listings automatically" in the popup to capture
+  only when you click **Capture this page**.
+- **Where data goes:** pages go only to `127.0.0.1:8765` on your own computer, and everything is
+  stored in `car_search.db` next to your config.
+- **No fake listings from websites:** the local server accepts posts only from browser
+  extensions, never from ordinary web pages.
 
 ## Layout
 
 ```
+extension/         browser extension (Manifest V3): content.js reads pages, background.js
+                   talks to car-search and shows notifications, popup.* is the toolbar popup
 car_search/
-  config.py        TOML config + env-var secrets
-  models.py        Listing record shared by all sources
-  sources/         marketcheck.py, dealer_feed.py, sample.py, base.py
+  extract.py       schema.org + text-fallback extraction, saved-HTML parsing
+  server.py        local capture server
+  pipeline.py      ingest: dedupe → filter → store → score → alert
   dedupe.py        VIN merge (cheapest copy wins, flags OR-ed, all URLs kept)
-  nhtsa.py         vPIC decode + recalls
-  db.py            SQLite schema and queries
   scoring.py       market model + adjustments
-  alerts.py        email / Telegram
+  db.py            SQLite schema and queries
+  alerts.py        alert text + optional email
+  importers.py     saved pages and CSV/JSON inventory files
   finance.py       payment + resale estimate
-  pipeline.py      one end-to-end run
+  config.py        TOML config
+  sources/sample.py  made-up demo listings
   cli.py           command line
 dashboard/app.py   Streamlit dashboard
-tests/             pytest suite (no network needed)
+tests/             pytest suite (runs offline)
 ```
 
-Run the tests with `pytest`.
+Run the tests with `pip install -e ".[dev]"` and then `pytest`.

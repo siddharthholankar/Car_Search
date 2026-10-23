@@ -1,4 +1,4 @@
-"""Email and Telegram alerts for high-scoring cars."""
+"""Alerts for high-scoring cars: browser notifications (sent by the extension) and optional email."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import smtplib
 from email.message import EmailMessage
 
 import pandas as pd
-import requests
 
 from .config import AlertConfig
 
@@ -26,19 +25,25 @@ def select_alerts(df: pd.DataFrame, threshold: float, realert_drop: float = 0.03
     return hits[fresh].sort_values("deal_score", ascending=False)
 
 
+def text_or_blank(value) -> str:
+    """Database blanks come back as None or NaN; both read as empty."""
+    return "" if value is None or (not isinstance(value, str) and pd.isna(value)) else str(value)
+
+
 def format_car(row) -> str:
-    trim = f" {row['trim']}" if row.get("trim") else ""
-    where = ", ".join(x for x in (row.get("city"), row.get("state")) if x)
+    trim = f" {text_or_blank(row.get('trim'))}" if text_or_blank(row.get("trim")) else ""
+    where = ", ".join(x for x in (text_or_blank(row.get("city")), text_or_blank(row.get("state"))) if x)
     dist = f" ({row['distance_miles']:.0f} mi)" if pd.notna(row.get("distance_miles")) else ""
+    seller = text_or_blank(row.get("dealer_name")) or "Seller"
     lines = [
         f"{row['year']} {row['make']} {row['model']}{trim} - ${row['price']:,.0f}",
         f"{row['deal_score'] * 100:.1f}% deal score, est. market ${row['market_price']:,.0f}, "
         f"{row['miles']:,} mi",
-        f"{row.get('dealer_name') or 'Seller'} - {where}{dist}",
+        f"{seller} - {where}{dist}" if where or dist else seller,
     ]
-    if row.get("alerted_price") and pd.notna(row["alerted_price"]):
+    if pd.notna(row.get("alerted_price")):
         lines.append(f"Price dropped from ${row['alerted_price']:,.0f}")
-    if row.get("url"):
+    if text_or_blank(row.get("url")):
         lines.append(row["url"])
     return "\n".join(lines)
 
@@ -60,17 +65,12 @@ def send_email(cfg: AlertConfig, subject: str, body: str) -> None:
         smtp.send_message(msg)
 
 
-def send_telegram(cfg: AlertConfig, text: str) -> None:
-    url = f"https://api.telegram.org/bot{cfg.telegram_bot_token}/sendMessage"
-    # Telegram caps messages at 4096 characters.
-    for start in range(0, len(text), 4000):
-        resp = requests.post(url, json={"chat_id": cfg.telegram_chat_id, "text": text[start:start + 4000],
-                                        "disable_web_page_preview": True}, timeout=30)
-        resp.raise_for_status()
-
-
 def dispatch(cfg: AlertConfig, cars: pd.DataFrame) -> list[str]:
-    """Send `cars` through every enabled channel. Returns the channels that succeeded."""
+    """Email `cars` if email is enabled. Returns the channels that succeeded.
+
+    Browser notifications don't go through here: the capture server hands the
+    deals back to the extension, which shows them.
+    """
     if cars.empty:
         return []
     body = build_message(cars)
@@ -81,12 +81,6 @@ def dispatch(cfg: AlertConfig, cars: pd.DataFrame) -> list[str]:
             sent.append("email")
         except Exception as exc:
             log.error("email alert failed: %s", exc)
-    if cfg.telegram_enabled:
-        try:
-            send_telegram(cfg, body)
-            sent.append("telegram")
-        except Exception as exc:
-            log.error("telegram alert failed: %s", exc)
-    if not (cfg.email_enabled or cfg.telegram_enabled):
-        log.info("no alert channel enabled; would have sent:\n%s", body)
+    else:
+        log.info("email alerts off; deals:\n%s", body)
     return sent

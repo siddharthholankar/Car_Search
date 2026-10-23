@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Car Search capture",
+  "version": "0.1.0",
+  "description": "Saves the used-car listings you browse to your local car-search app, which scores each deal.",
+  "permissions": ["storage", "notifications"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "Car Search", "default_icon": "icon.png" },
+  "icons": { "128": "icon.png" }
+}

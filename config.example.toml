@@ -1,36 +1,23 @@
-# Copy to config.toml and edit. Secrets can also come from environment
-# variables (see README), which take precedence over values in this file.
+# Copy to config.toml (car-search init) and edit.
+# Listings come from your browser through the extension; no API keys are needed.
 
 database = "car_search.db"
+server_port = 8765              # the extension sends pages here
+stale_days = 14                 # a car you haven't seen in this many days is treated as sold
 
 [search]
 zip = "71301"
+center = [31.3113, -92.4451]    # lat/lon of your zip, for distances (look it up once on a map)
 radius_miles = 200
 min_year = 2018
 max_price = 23000
 max_miles = 80000
+# Model names match loosely: "CR-V" also matches "CRV" and "CR-V Hybrid".
 vehicles = [
     { make = "Toyota", model = "RAV4" },
     { make = "Honda", model = "CR-V" },
     { make = "Honda", model = "Accord" },
 ]
-
-[sources]
-# "sample" generates fake listings so you can try the pipeline without an API key.
-# Turn it off once a real source is configured.
-enabled = ["sample"]            # e.g. ["marketcheck", "dealer_feed"]
-
-[sources.marketcheck]
-api_key = ""                    # or MARKETCHECK_API_KEY
-max_pages = 5                   # 50 listings per page per vehicle
-
-[sources.dealer_feed]
-# Inventory feeds that dealers publish (CSV or JSON). Check each site's terms first.
-urls = []
-
-[enrich]
-decode_vins = true              # NHTSA vPIC (free)
-recalls = true                  # NHTSA recalls by make/model/year (free)
 
 [scoring]
 min_training_rows = 30
@@ -40,6 +27,7 @@ penalties = { accident = 0.05, salvage_or_rebuilt = 0.40, repossession = 0.05, r
 bonuses = { one_owner = 0.02, service_records = 0.01, certified = 0.02, long_on_market = 0.01 }
 
 [alerts]
+# Deals always pop up as browser notifications. Email is optional.
 threshold = 0.08                # alert when deal score >= 8% below market
 realert_drop = 0.03             # alert again only after a further 3% price drop
 email_enabled = false
@@ -48,6 +36,3 @@ smtp_port = 587
 smtp_user = ""                  # or SMTP_USER
 smtp_password = ""              # or SMTP_PASSWORD (use an app password)
 email_to = ""
-telegram_enabled = false
-telegram_bot_token = ""         # or TELEGRAM_BOT_TOKEN
-telegram_chat_id = ""           # or TELEGRAM_CHAT_ID

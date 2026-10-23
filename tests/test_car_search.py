@@ -5,17 +5,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from car_search import nhtsa
 from car_search.alerts import build_message, select_alerts
 from car_search.config import Config, ScoringConfig, SearchConfig, Vehicle, load_config
 from car_search.db import Database
 from car_search.dedupe import dedupe
 from car_search.finance import monthly_payment
 from car_search.models import Listing
-from car_search.pipeline import run
+from car_search.pipeline import ingest
 from car_search.scoring import adjustments, score_listings
-from car_search.sources.dealer_feed import parse_frame, read_feed
-from car_search.sources.marketcheck import parse_listing
+from car_search.importers import parse_frame, read_feed
 from car_search.sources.sample import SampleSource
 
 VIN = "1HGCV1F30LA000001"
@@ -27,7 +25,7 @@ def car(**kw):
 
 
 def config(tmp_path, **kw):
-    cfg = Config(database=str(tmp_path / "t.db"), decode_vins=False, recalls=False)
+    cfg = Config(database=str(tmp_path / "t.db"))
     cfg.search = SearchConfig(vehicles=[Vehicle("Toyota", "RAV4"), Vehicle("Honda", "CR-V"),
                                         Vehicle("Honda", "Accord")])
     for k, v in kw.items():
@@ -90,17 +88,6 @@ def test_payment():
     assert monthly_payment(12000, apr=0, term_months=12, tax_rate=0).monthly_payment == 1000
 
 
-def test_marketcheck_parse():
-    item = {"id": "x1", "vin": VIN, "price": 21000, "miles": 30000, "dom_active": 50, "dist": 42.5,
-            "vdp_url": "https://d/1", "carfax_clean_title": False, "carfax_1_owner": True,
-            "build": {"year": 2021, "make": "Honda", "model": "Accord", "trim": "Sport", "drivetrain": "FWD"},
-            "dealer": {"name": "D", "city": "Alexandria", "state": "LA", "latitude": "31.3", "longitude": "-92.4"}}
-    l = parse_listing(item)
-    assert l.salvage_or_rebuilt is True and l.owners == 1 and l.days_on_market == 50
-    assert l.latitude == 31.3 and l.trim == "Sport"
-    assert parse_listing({"vin": VIN}) is None
-
-
 def test_dealer_feed_csv():
     text = "VIN,Year,Make,Model,Mileage,Internet Price,Certified\n" \
            f"{VIN},2021,HONDA,Accord,\"41,000\",\"$19,995\",yes\nbad,x,Honda,Accord,1,1,no\n"
@@ -110,26 +97,18 @@ def test_dealer_feed_csv():
     assert out[0].make == "Honda"
 
 
-def test_vpic_parse():
-    row = {"DriveType": "AWD/All-Wheel Drive", "DisplacementL": "2.5", "EngineCylinders": "4",
-           "Trim": "XLE", "BodyClass": "Sport Utility Vehicle (SUV)/Multi-Purpose Vehicle (MPV)"}
-    d = nhtsa.parse_vpic(row)
-    assert d["drivetrain"] == "AWD" and d["engine"] == "2.5L 4-cyl" and d["trim"] == "XLE"
-
-
 def test_pipeline_history_and_alerts(tmp_path):
     cfg = config(tmp_path)
     db = Database(cfg.database)
     day1 = SampleSource(today=dt.date(2026, 3, 1))
-    r1 = run(cfg, db, sources=[day1])
+    r1 = ingest(cfg, db, day1.fetch(cfg.search), complete_snapshot=True)
     assert r1.unique > 50 and r1.new == r1.unique
-    assert r1.fetched > r1.unique  # duplicates across "sites" were merged
+    assert r1.received > r1.unique  # duplicates across "sites" were merged
     assert len(r1.alerts) > 0 and r1.alert_channels == []
     assert r1.model_info["method"] == "ridge_log_price"
 
-    # Pretend alerts went out, then come back a week later.
-    db.mark_alerted(list(zip(r1.alerts["vin"], r1.alerts["price"])))
-    r2 = run(cfg, db, sources=[SampleSource(today=dt.date(2026, 3, 8))])
+    # Alerts are marked as shown; come back a week later.
+    r2 = ingest(cfg, db, SampleSource(today=dt.date(2026, 3, 8)).fetch(cfg.search), complete_snapshot=True)
     assert r2.price_drops > 0 and r2.went_inactive > 0
     frame = db.listings_frame()
     dropped = frame[frame["vin"].isin(r1.alerts["vin"]) & (frame["price"] < frame["alerted_price"])]
@@ -138,23 +117,6 @@ def test_pipeline_history_and_alerts(tmp_path):
     vin = frame[frame["active"] == 1].iloc[0]["vin"]
     assert len(db.price_history(vin)) >= 1
     assert "deal" in build_message(r2.alerts.head(2)) or r2.alerts.empty
-    db.close()
-
-
-def test_failed_source_does_not_retire_cars(tmp_path):
-    cfg = config(tmp_path)
-    db = Database(cfg.database)
-    run(cfg, db, sources=[SampleSource(today=dt.date(2026, 3, 1))], send_alerts=False)
-
-    class Broken(SampleSource):
-        name = "broken"
-
-        def fetch(self, search):
-            raise RuntimeError("down")
-
-    r = run(cfg, db, sources=[Broken()], send_alerts=False)
-    assert r.went_inactive == 0 and r.errors
-    assert (db.listings_frame()["active"] == 1).all()
     db.close()
 
 
@@ -170,8 +132,17 @@ def test_load_config(tmp_path, monkeypatch):
     path = tmp_path / "c.toml"
     path.write_text('[search]\nzip = "70501"\nvehicles = [{make="Mazda", model="CX-5"}]\n'
                     '[scoring]\npenalties = { accident = 0.1 }\n[alerts]\nthreshold = 0.1\n')
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("SMTP_PASSWORD", "pw")
     cfg = load_config(path)
     assert cfg.search.zip == "70501" and cfg.search.vehicles[0].model == "CX-5"
     assert cfg.scoring.penalties["accident"] == 0.1 and cfg.scoring.penalties["rental"] == 0.03
-    assert cfg.alerts.threshold == 0.1 and cfg.alerts.telegram_bot_token == "tok"
+    assert cfg.alerts.threshold == 0.1 and cfg.alerts.smtp_password == "pw"
+
+
+def test_alert_text_with_missing_location():
+    row = pd.Series({"year": 2023, "make": "Honda", "model": "CR-V", "trim": np.nan, "price": 16900.0,
+                     "deal_score": 0.12, "market_price": 19200.0, "miles": 31402, "city": np.nan,
+                     "state": None, "dealer_name": np.nan, "distance_miles": np.nan,
+                     "alerted_price": np.nan, "url": "https://dealer.example/1"})
+    text = build_message(pd.DataFrame([row]))
+    assert "2023 Honda CR-V - $16,900" in text and "\nSeller\n" in text

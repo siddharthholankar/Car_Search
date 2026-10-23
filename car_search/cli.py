@@ -1,4 +1,4 @@
-"""Command line: car-search run | top | history | payment | test-alert | dashboard."""
+"""Command line: car-search serve | import | demo | top | history | payment | test-alert | dashboard."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import logging
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -16,7 +15,9 @@ from .alerts import build_message, dispatch
 from .config import load_config
 from .db import Database
 from .finance import monthly_payment, resale_estimate
-from .pipeline import rescore, run
+from .importers import import_file
+from .pipeline import ingest, rescore
+from .sources.sample import SampleSource
 
 log = logging.getLogger("car_search")
 
@@ -27,33 +28,57 @@ def cmd_init(args) -> int:
         print("config.toml already exists")
         return 1
     shutil.copy(Path(__file__).resolve().parent.parent / "config.example.toml", target)
-    print("wrote config.toml - edit your search, then run: car-search run")
+    print("wrote config.toml - edit your search, then run: car-search serve")
     return 0
 
 
-def cmd_run(args) -> int:
+def cmd_serve(args) -> int:
+    from .server import serve
+
     config = load_config(args.config)
-    while True:
-        db = Database(config.database)
-        try:
-            r = run(config, db, send_alerts=not args.no_alerts)
-        finally:
-            db.close()
-        info = r.model_info
-        err = info.get("median_abs_pct_error")
-        print(f"fetched {r.fetched} listings -> {r.unique} unique cars | {r.new} new, "
-              f"{r.price_drops} price drops, {r.went_inactive} gone")
+    serve(config, args.port)
+    return 0
+
+
+def _report(r, config) -> None:
+    info = r.model_info
+    err = info.get("median_abs_pct_error")
+    print(f"{r.received} listings -> {r.unique} unique cars, {len(r.saved_vins)} match your search | "
+          f"{r.new} new, {r.price_drops} price drops, {r.went_inactive} retired")
+    if info:
         print(f"market model: {info.get('method')} on {info.get('training_rows')} cars"
               + (f", median error {err:.1%}" if err is not None else ""))
-        if len(r.alerts):
-            channels = ", ".join(r.alert_channels) or "no channel enabled"
-            print(f"{len(r.alerts)} deals at or above {config.alerts.threshold:.0%} ({channels})")
-        for e in r.errors:
-            print(f"warning: {e}", file=sys.stderr)
-        if not args.watch:
-            return 0
-        print(f"next run in {args.watch} h")
-        time.sleep(args.watch * 3600)
+    if len(r.alerts):
+        print(f"\n{len(r.alerts)} deals at or above {config.alerts.threshold:.0%}:\n")
+        print(build_message(r.alerts.head(10)))
+
+
+def cmd_import(args) -> int:
+    config = load_config(args.config)
+    listings = []
+    for path in args.files:
+        found = import_file(path)
+        print(f"{path}: {len(found)} cars")
+        listings.extend(found)
+    db = Database(config.database)
+    try:
+        _report(ingest(config, db, listings), config)
+    finally:
+        db.close()
+    return 0
+
+
+def cmd_demo(args) -> int:
+    """Fill the database with fake sample listings to try the scoring and dashboard."""
+    config = load_config(args.config)
+    db = Database(config.database)
+    try:
+        r = ingest(config, db, SampleSource().fetch(config.search), complete_snapshot=True)
+        _report(r, config)
+        print("\n(These are made-up cars with VINs starting DEMO. Delete the database file to start fresh.)")
+    finally:
+        db.close()
+    return 0
 
 
 def cmd_top(args) -> int:
@@ -66,7 +91,7 @@ def cmd_top(args) -> int:
     finally:
         db.close()
     if df.empty:
-        print("no listings yet - run: car-search run")
+        print("no listings yet - run car-search serve and browse some listings")
         return 0
     df = df.dropna(subset=["deal_score"]).sort_values("deal_score", ascending=False).head(args.n)
     view = pd.DataFrame({
@@ -116,12 +141,12 @@ def cmd_test_alert(args) -> int:
     finally:
         db.close()
     if df.empty:
-        print("no scored listings yet - run: car-search run")
+        print("no scored listings yet")
         return 1
     sample = df.sort_values("deal_score", ascending=False).head(1)
     print(build_message(sample))
     sent = dispatch(config.alerts, sample)
-    print(f"sent via: {', '.join(sent) or 'nothing (enable email or telegram in config.toml)'}")
+    print(f"sent via: {', '.join(sent) or 'nothing (set email_enabled and SMTP settings in config.toml)'}")
     return 0
 
 
@@ -139,10 +164,15 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("init", help="create config.toml from the example").set_defaults(func=cmd_init)
 
-    p = sub.add_parser("run", help="collect, score and alert")
-    p.add_argument("--no-alerts", action="store_true")
-    p.add_argument("--watch", type=float, metavar="HOURS", help="keep running every HOURS (e.g. 6)")
-    p.set_defaults(func=cmd_run)
+    p = sub.add_parser("serve", help="receive listings from the browser extension")
+    p.add_argument("--port", type=int, help="default 8765 (the extension expects 8765)")
+    p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("import", help="import saved pages (.html) or inventory files (.csv/.json)")
+    p.add_argument("files", nargs="+")
+    p.set_defaults(func=cmd_import)
+
+    sub.add_parser("demo", help="load fake sample listings to try things out").set_defaults(func=cmd_demo)
 
     p = sub.add_parser("top", help="show the best current deals")
     p.add_argument("-n", type=int, default=20)
@@ -164,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--trade-in", type=float, default=0.0)
     p.set_defaults(func=cmd_payment)
 
-    sub.add_parser("test-alert", help="send the current best deal through your alert channels") \
+    sub.add_parser("test-alert", help="email the current best deal (if email is set up)") \
         .set_defaults(func=cmd_test_alert)
 
     sub.add_parser("dashboard", help="open the Streamlit dashboard").set_defaults(func=cmd_dashboard)

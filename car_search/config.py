@@ -1,4 +1,4 @@
-"""Load settings from a TOML file, with environment variables for secrets."""
+"""Load settings from a TOML file, with environment variables for the email password."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ class SearchConfig:
     max_price: int = 23000
     max_miles: int = 80000
     vehicles: list[Vehicle] = field(default_factory=list)
+    # Coordinates of `zip`, for distances to dealers whose pages include a location.
+    center: tuple[float, float] | None = (31.3113, -92.4451)
 
 
 @dataclass
@@ -54,21 +56,14 @@ class AlertConfig:
     smtp_user: str = ""
     smtp_password: str = ""
     email_to: str = ""
-    telegram_enabled: bool = False
-    telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
 
 
 @dataclass
 class Config:
     database: str = "car_search.db"
     search: SearchConfig = field(default_factory=SearchConfig)
-    sources: list[str] = field(default_factory=lambda: ["sample"])
-    marketcheck_api_key: str = ""
-    marketcheck_max_pages: int = 5
-    dealer_feed_urls: list[str] = field(default_factory=list)
-    decode_vins: bool = True
-    recalls: bool = True
+    server_port: int = 8765
+    stale_days: int = 14  # a car not seen in your browser for this long is treated as sold
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
 
@@ -96,11 +91,8 @@ def load_config(path: str | Path | None = None) -> Config:
         vehicles=[Vehicle(v["make"], v["model"]) for v in s.get("vehicles", [])]
         or [Vehicle("Toyota", "RAV4"), Vehicle("Honda", "CR-V"), Vehicle("Honda", "Accord")],
     )
-
-    src = raw.get("sources", {})
-    mc = src.get("marketcheck", {})
-    feeds = src.get("dealer_feed", {})
-    enrich = raw.get("enrich", {})
+    if "center" in s:
+        search.center = tuple(s["center"]) if s["center"] else None
 
     sc = raw.get("scoring", {})
     scoring = ScoringConfig()
@@ -119,20 +111,13 @@ def load_config(path: str | Path | None = None) -> Config:
         smtp_user=_env("SMTP_USER", a.get("smtp_user", "")),
         smtp_password=_env("SMTP_PASSWORD", a.get("smtp_password", "")),
         email_to=_env("ALERT_EMAIL_TO", a.get("email_to", "")),
-        telegram_enabled=bool(a.get("telegram_enabled", False)),
-        telegram_bot_token=_env("TELEGRAM_BOT_TOKEN", a.get("telegram_bot_token", "")),
-        telegram_chat_id=_env("TELEGRAM_CHAT_ID", a.get("telegram_chat_id", "")),
     )
 
     return Config(
         database=raw.get("database", "car_search.db"),
         search=search,
-        sources=list(src.get("enabled", ["sample"])),
-        marketcheck_api_key=_env("MARKETCHECK_API_KEY", mc.get("api_key", "")),
-        marketcheck_max_pages=int(mc.get("max_pages", 5)),
-        dealer_feed_urls=list(feeds.get("urls", [])),
-        decode_vins=bool(enrich.get("decode_vins", True)),
-        recalls=bool(enrich.get("recalls", True)),
+        server_port=int(raw.get("server_port", 8765)),
+        stale_days=int(raw.get("stale_days", 14)),
         scoring=scoring,
         alerts=alerts,
     )

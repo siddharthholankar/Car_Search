@@ -12,7 +12,6 @@ import streamlit as st
 from car_search.config import load_config
 from car_search.db import Database
 from car_search.finance import monthly_payment, resale_estimate
-from car_search.pipeline import run
 
 ACCENT = "#2a78d6"
 
@@ -45,22 +44,6 @@ def load_history(vin: str) -> pd.DataFrame:
         db.close()
 
 
-def load_recalls(make: str, model: str, year: int) -> list[dict]:
-    db = get_db()
-    try:
-        return db.recalls_for(make, model, year)
-    finally:
-        db.close()
-
-
-def last_run() -> pd.DataFrame:
-    db = get_db()
-    try:
-        return db.runs_frame(1)
-    finally:
-        db.close()
-
-
 st.title("Used-car deal finder")
 s = config.search
 st.caption(f"{', '.join(f'{v.make} {v.model}' for v in s.vehicles)} · {s.min_year}+ · under \\${s.max_price:,} · "
@@ -70,30 +53,31 @@ df = load_listings()
 
 with st.sidebar:
     st.header("Filters")
-    if st.button("Run collection now", width="stretch"):
-        with st.spinner("Collecting listings..."):
-            db = get_db()
-            try:
-                r = run(config, db)
-            finally:
-                db.close()
-        st.success(f"{r.unique} cars, {r.new} new, {r.price_drops} price drops, {len(r.alerts)} alerts")
-        for e in r.errors[:5]:
-            st.warning(e)
+    if st.button("Refresh", width="stretch"):
         load_listings.clear()
         df = load_listings()
 
-    if df.empty:
-        st.info("No listings yet.")
-        st.stop()
+if df.empty:
+    st.info(
+        "**No cars yet.** Listings come from the pages you browse:\n\n"
+        "1. In a terminal, run `car-search serve`\n"
+        "2. Install the extension: open `chrome://extensions`, turn on **Developer mode**, click "
+        "**Load unpacked** and pick this project's `extension` folder\n"
+        "3. Browse used-car listings on Cars.com, CarGurus, Autotrader or dealer sites. "
+        "Matching cars are saved as you go.\n\n"
+        "To try it with made-up cars first, run `car-search demo`."
+    )
+    st.stop()
+
+with st.sidebar:
 
     show_inactive = st.checkbox("Include cars no longer listed", value=False)
     models = sorted((df["make"] + " " + df["model"]).unique())
     chosen = st.multiselect("Vehicles", models, default=models)
     max_price = st.slider("Max price", 0, int(max(df["price"].max(), 1000)), int(df["price"].max()), step=500)
     max_miles = st.slider("Max miles", 0, int(max(df["miles"].max(), 1000)), int(df["miles"].max()), step=5000)
-    years = st.slider("Model years", int(df["year"].min()), int(df["year"].max()),
-                      (int(df["year"].min()), int(df["year"].max())))
+    lo, hi = int(df["year"].min()), int(df["year"].max())
+    years = st.slider("Model years", lo, hi, (lo, hi)) if lo < hi else (lo, hi)
     max_dist = st.slider("Max distance (mi)", 0, max(config.search.radius_miles, 1), config.search.radius_miles)
     min_score = st.slider("Min deal score (%)", -50, 40, -50, help="Leftmost shows everything")
     clean_only = st.checkbox("Hide accident / salvage / rebuilt", value=False)
@@ -116,8 +100,8 @@ c1.metric("Cars shown", f"{len(view):,}")
 c2.metric(f"Deals ≥ {config.alerts.threshold:.0%} below market",
           int((view["deal_score"] >= config.alerts.threshold).sum()))
 c3.metric("Median price", f"${view['price'].median():,.0f}" if len(view) else "-")
-runs = last_run()
-c4.metric("Last run (UTC)", pd.Timestamp(runs["finished_at"].iloc[0]).strftime("%b %d %H:%M") if len(runs) else "never")
+seen = pd.to_datetime(df["last_seen"], utc=True).max()
+c4.metric("Last capture (UTC)", seen.strftime("%b %d %H:%M") if pd.notna(seen) else "never")
 
 # --- table ------------------------------------------------------------------
 table = pd.DataFrame({
@@ -196,12 +180,8 @@ with d1:
         st.markdown(f"- {note}")
     links = [car["url"], *json.loads(car["other_urls"] or "[]")]
     st.markdown(" · ".join(f"[listing {i + 1}]({u})" for i, u in enumerate(links) if u))
-    recalls = load_recalls(car["make"], car["model"], int(car["year"]))
-    if recalls:
-        with st.expander(f"{len(recalls)} NHTSA recall campaigns for this model year"):
-            st.caption("Check the VIN at nhtsa.gov/recalls to see whether this car's were repaired.")
-            for r in recalls:
-                st.markdown(f"**{r['campaign']}** — {r['component']}: {r['summary']}")
+    if not vin.startswith("DEMO"):
+        st.markdown(f"[Check open recalls for this VIN on nhtsa.gov](https://www.nhtsa.gov/recalls?vin={vin})")
 
     hist = load_history(vin)
     st.markdown("**Price history**")

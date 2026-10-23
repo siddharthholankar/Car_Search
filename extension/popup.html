@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --ink: #1f2328; --muted: #656d76; --line: #d0d7de; --accent: #2a78d6; --good: #1a7f37; --bg: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e6edf3; --muted: #9198a1; --line: #3d444d; --accent: #4493f8; --good: #3fb950; --bg: #151b23; }
+  }
+  body { font: 13px/1.4 system-ui, sans-serif; color: var(--ink); background: var(--bg); width: 320px; margin: 0; padding: 12px; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 8px; margin: 10px 0; }
+  button { flex: 1; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  ul { list-style: none; padding: 0; margin: 8px 0 0; }
+  li { padding: 6px 0; border-top: 1px solid var(--line); }
+  .score { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .good { color: var(--good); }
+  label { display: flex; gap: 6px; align-items: center; }
+  .error { color: #cf222e; }
+</style>
+</head>
+<body>
+  <h1>Car Search</h1>
+  <div id="server" class="muted">Checking car-search…</div>
+  <div id="page" style="margin-top:8px"></div>
+  <ul id="cars"></ul>
+  <div class="row">
+    <button id="capture" class="primary">Capture this page</button>
+    <button id="dashboard">Open dashboard</button>
+  </div>
+  <label><input type="checkbox" id="auto"> Save listings automatically as I browse</label>
+  <script src="popup.js"></script>
+</body>
+</html>

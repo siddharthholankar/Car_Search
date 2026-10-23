@@ -1,4 +1,4 @@
-"""SQLite storage: current listings, price history, API caches and run log."""
+"""SQLite storage: current listings, price history and a log of browser captures."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS listings (
     latitude REAL, longitude REAL, distance_miles REAL, days_on_market INTEGER,
     accident_reported INTEGER, salvage_or_rebuilt INTEGER, repossession INTEGER,
     rental_history INTEGER, owners INTEGER, service_records INTEGER, certified INTEGER,
-    recall_count INTEGER,
     first_seen TEXT, last_seen TEXT, active INTEGER DEFAULT 1,
     market_price REAL, value_score REAL, deal_score REAL, score_notes TEXT, negotiable INTEGER,
     alerted_price REAL, alerted_at TEXT
@@ -31,16 +30,9 @@ CREATE TABLE IF NOT EXISTS price_history (
     vin TEXT, price REAL, source TEXT, seen_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_price_history_vin ON price_history(vin);
-CREATE TABLE IF NOT EXISTS vin_decodes (vin TEXT PRIMARY KEY, data TEXT, decoded_at TEXT);
-CREATE TABLE IF NOT EXISTS recalls (
-    make TEXT, model TEXT, year INTEGER, data TEXT, fetched_at TEXT,
-    PRIMARY KEY (make, model, year)
-);
-CREATE TABLE IF NOT EXISTS runs (
+CREATE TABLE IF NOT EXISTS captures (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at TEXT, finished_at TEXT,
-    fetched INTEGER, unique_cars INTEGER, new_cars INTEGER, price_drops INTEGER, alerts INTEGER,
-    errors TEXT
+    captured_at TEXT, url TEXT, found INTEGER, saved INTEGER, new_cars INTEGER, alerts INTEGER
 );
 """
 
@@ -107,6 +99,13 @@ class Database:
             self.conn.executemany("UPDATE listings SET active = 0 WHERE vin = ?", [(v,) for v in gone])
         return len(gone)
 
+    def mark_stale(self, days: int) -> int:
+        """Retire active cars not seen for `days` days."""
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).isoformat(timespec="seconds")
+        with self.conn:
+            cur = self.conn.execute("UPDATE listings SET active = 0 WHERE active = 1 AND last_seen < ?", (cutoff,))
+        return cur.rowcount
+
     def listings_frame(self, active_only: bool = False) -> pd.DataFrame:
         sql = "SELECT * FROM listings" + (" WHERE active = 1" if active_only else "")
         return pd.read_sql_query(sql, self.conn)
@@ -121,10 +120,6 @@ class Database:
                  for r in scores.itertuples()],
             )
 
-    def set_recall_count(self, vin: str, count: int) -> None:
-        with self.conn:
-            self.conn.execute("UPDATE listings SET recall_count = ? WHERE vin = ?", (count, vin))
-
     def mark_alerted(self, vins_prices: list[tuple[str, float]]) -> None:
         with self.conn:
             self.conn.executemany("UPDATE listings SET alerted_price = ?, alerted_at = ? WHERE vin = ?",
@@ -134,50 +129,15 @@ class Database:
         return pd.read_sql_query("SELECT price, source, seen_at FROM price_history WHERE vin = ? ORDER BY seen_at",
                                  self.conn, params=(vin,))
 
-    # --- caches -------------------------------------------------------------
+    # --- captures -----------------------------------------------------------
 
-    def cached_decodes(self, vins: list[str]) -> dict[str, dict]:
-        if not vins:
-            return {}
-        marks = ",".join("?" for _ in vins)
-        rows = self.conn.execute(f"SELECT vin, data FROM vin_decodes WHERE vin IN ({marks})", vins)
-        return {r["vin"]: json.loads(r["data"]) for r in rows}
-
-    def save_decodes(self, decoded: dict[str, dict]) -> None:
+    def log_capture(self, url: str, found: int, saved: int, new: int, alerts: int) -> None:
         with self.conn:
-            self.conn.executemany("INSERT OR REPLACE INTO vin_decodes VALUES (?, ?, ?)",
-                                  [(v, json.dumps(d), now()) for v, d in decoded.items()])
+            self.conn.execute("INSERT INTO captures (captured_at, url, found, saved, new_cars, alerts) "
+                              "VALUES (?, ?, ?, ?, ?, ?)", (now(), url, found, saved, new, alerts))
 
-    def cached_recalls(self, make: str, model: str, year: int, max_age_days: int = 7) -> list[dict] | None:
-        row = self.conn.execute("SELECT data, fetched_at FROM recalls WHERE make = ? AND model = ? AND year = ?",
-                                (make, model, year)).fetchone()
-        if row is None:
-            return None
-        age = dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(row["fetched_at"])
-        return json.loads(row["data"]) if age.days < max_age_days else None
-
-    def save_recalls(self, make: str, model: str, year: int, recalls: list[dict]) -> None:
-        with self.conn:
-            self.conn.execute("INSERT OR REPLACE INTO recalls VALUES (?, ?, ?, ?, ?)",
-                              (make, model, year, json.dumps(recalls), now()))
-
-    def recalls_for(self, make: str, model: str, year: int) -> list[dict]:
-        row = self.conn.execute("SELECT data FROM recalls WHERE make = ? AND model = ? AND year = ?",
-                                (make, model, year)).fetchone()
-        return json.loads(row["data"]) if row else []
-
-    # --- runs ---------------------------------------------------------------
-
-    def log_run(self, started_at: str, fetched: int, unique: int, new: int, drops: int,
-                alerts: int, errors: list[str]) -> None:
-        with self.conn:
-            self.conn.execute(
-                "INSERT INTO runs (started_at, finished_at, fetched, unique_cars, new_cars, price_drops, alerts, errors) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (started_at, now(), fetched, unique, new, drops, alerts, json.dumps(errors)))
-
-    def runs_frame(self, limit: int = 20) -> pd.DataFrame:
-        return pd.read_sql_query("SELECT * FROM runs ORDER BY id DESC LIMIT ?", self.conn, params=(limit,))
+    def captures_frame(self, limit: int = 20) -> pd.DataFrame:
+        return pd.read_sql_query("SELECT * FROM captures ORDER BY id DESC LIMIT ?", self.conn, params=(limit,))
 
 
 def _num(value) -> float | None:

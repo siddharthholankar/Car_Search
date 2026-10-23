@@ -5,11 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "car-search"
 version = "0.1.0"
-description = "Personal used-car deal finder: multi-source listings, VIN dedupe, deal scoring and alerts"
+description = "Personal used-car deal finder fed by your own browser: VIN dedupe, deal scoring and alerts"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "requests>=2.31",
     "pandas>=2.0",
     "numpy>=1.24",
     "scikit-learn>=1.3",
