@@ -24,12 +24,19 @@ automated scraping.
 
 ## Setup (about 5 minutes)
 
-1. **Install the program** (Python 3.11 or newer):
+1. **Install the program.** You need [Python 3.11+](https://www.python.org/downloads/); on
+   Windows, tick "Add python.exe to PATH" in the installer. Then download the code:
    ```bash
-   pip install -e ".[dashboard]"
-   car-search init          # creates config.toml; edit your zip, models, price and miles
-   car-search serve         # leave this running while you browse
+   git clone -b claude/awesome-davinci-vda2r7 https://github.com/siddharthholankar/Car_Search.git
    ```
+   (Or, on GitHub, switch to that branch and use **Code → Download ZIP**.)
+
+   - **Windows:** double-click `install.bat` once, then `start.bat` whenever you want to use it.
+   - **Mac/Linux:** run `./install.sh` once, then `./start.sh`.
+
+   The install scripts set everything up inside the folder (in `.venv`) and create
+   `config.toml`. Edit that file with your zip, models, max price and miles. The start scripts
+   run the capture server and open the dashboard.
 2. **Install the extension** in Chrome, Edge or Brave:
    - Open `chrome://extensions` (or `edge://extensions`).
    - Turn on **Developer mode**.
@@ -38,7 +45,8 @@ automated scraping.
 3. **Browse.** Search for your cars on any listing site. Results pages and single-car pages both
    work. The icon's badge shows how many cars on the page match your search, and turns into a
    green **$** when the page has a deal. Click the icon to see each car's score.
-4. **See everything** with `car-search dashboard`, or the **Open dashboard** button in the popup.
+4. **See everything** in the dashboard that `start.bat`/`start.sh` opens, or click **Open dashboard**
+   in the popup.
 
 Want to look around before setting anything up? Run `car-search demo`. It loads about 90 made-up
 cars (their VINs start with `DEMO`).
