@@ -47,6 +47,7 @@ class ScoringConfig:
 @dataclass
 class AlertConfig:
     threshold: float = 0.08
+    realert_drop: float = 0.03
     email_enabled: bool = False
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
@@ -111,6 +112,7 @@ def load_config(path: str | Path | None = None) -> Config:
     a = raw.get("alerts", {})
     alerts = AlertConfig(
         threshold=float(a.get("threshold", 0.08)),
+        realert_drop=float(a.get("realert_drop", 0.03)),
         email_enabled=bool(a.get("email_enabled", False)),
         smtp_host=a.get("smtp_host", "smtp.gmail.com"),
         smtp_port=int(a.get("smtp_port", 587)),

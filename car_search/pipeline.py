@@ -75,7 +75,8 @@ def run(config: Config, db: Database, sources: list[Source] | None = None,
     rescore(config, db, result)
 
     if send_alerts:
-        alerts = select_alerts(db.listings_frame(active_only=True), config.alerts.threshold)
+        alerts = select_alerts(db.listings_frame(active_only=True), config.alerts.threshold,
+                               config.alerts.realert_drop)
         result.alerts = alerts
         result.alert_channels = dispatch(config.alerts, alerts)
         if result.alert_channels:

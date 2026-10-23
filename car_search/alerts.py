@@ -14,14 +14,15 @@ from .config import AlertConfig
 log = logging.getLogger(__name__)
 
 
-def select_alerts(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
-    """Active cars scoring at or above `threshold` that we haven't alerted at this price or lower."""
+def select_alerts(df: pd.DataFrame, threshold: float, realert_drop: float = 0.03) -> pd.DataFrame:
+    """Active cars scoring at or above `threshold` that are new to us, or whose price has fallen
+    at least `realert_drop` (a fraction) below the price we last alerted at."""
     if df.empty:
         return df
     score = pd.to_numeric(df["deal_score"], errors="coerce")
     hits = df[(df["active"] == 1) & (score >= threshold)]
     alerted = pd.to_numeric(hits["alerted_price"], errors="coerce")
-    fresh = alerted.isna() | (hits["price"] < alerted)
+    fresh = alerted.isna() | (hits["price"] <= alerted * (1 - realert_drop))
     return hits[fresh].sort_values("deal_score", ascending=False)
 
 

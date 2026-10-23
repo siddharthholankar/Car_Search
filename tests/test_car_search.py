@@ -159,8 +159,10 @@ def test_failed_source_does_not_retire_cars(tmp_path):
 
 
 def test_select_alerts_threshold():
-    df = pd.DataFrame({"vin": ["a", "b", "c"], "active": [1, 1, 1], "deal_score": [0.1, 0.05, 0.2],
-                       "price": [100, 100, 90], "alerted_price": [None, None, 95]})
+    df = pd.DataFrame({"vin": ["a", "b", "c", "d"], "active": [1, 1, 1, 1],
+                       "deal_score": [0.1, 0.05, 0.2, 0.3],
+                       "price": [100, 100, 90, 99], "alerted_price": [None, None, 95, 100]})
+    # "d" dropped only 1% since its last alert, so it stays quiet.
     assert list(select_alerts(df, 0.08)["vin"]) == ["c", "a"]
 
 

@@ -86,7 +86,8 @@ flags. Accident, rental and owner-count details usually need a paid history repo
 ## Alerts
 
 After each run, active cars whose `deal_score` is at or above the threshold trigger an alert.
-A car alerts once, and again only if its price drops below the price it alerted at.
+A car alerts once, and again only if its price falls at least `realert_drop` (default 3%) below
+the price it last alerted at, so small $100 cuts don't resend the same car.
 
 - **Email**: SMTP with STARTTLS. For Gmail, use an app password.
 - **Telegram**: create a bot with @BotFather, then put its token and your chat id in the config.

@@ -41,6 +41,7 @@ bonuses = { one_owner = 0.02, service_records = 0.01, certified = 0.02, long_on_
 
 [alerts]
 threshold = 0.08                # alert when deal score >= 8% below market
+realert_drop = 0.03             # alert again only after a further 3% price drop
 email_enabled = false
 smtp_host = "smtp.gmail.com"
 smtp_port = 587
